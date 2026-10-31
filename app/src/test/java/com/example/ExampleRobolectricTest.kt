@@ -6,6 +6,11 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.SlatyDatabase
 import com.example.data.local.TaskEntity
+import com.example.data.local.StudentTaskEntity
+import com.example.data.local.StudentTaskPriority
+import com.example.data.local.StudentTaskStatus
+import com.example.data.local.StudentTaskType
+import com.example.data.repository.TaskRepository
 import com.example.data.repository.TaskSyncRepository
 import com.example.model.TaskItem
 import com.example.model.TaskStatus
@@ -116,6 +121,100 @@ class ExampleRobolectricTest {
         dao.markSynced("task_test_01")
         val pendingAfterSync = dao.getPendingSyncTasks()
         assertTrue(pendingAfterSync.isEmpty())
+    }
+
+    @Test
+    fun `test student assignments and test prep tasks in room database`() = testScope.runTest {
+        val studentDao = testDb.studentTaskDao()
+        val taskRepo = TaskRepository(studentDao, testDispatcher)
+
+        // 1. Verify initially empty
+        assertEquals(0, taskRepo.totalCount.first())
+
+        // 2. Insert Assignment
+        val assignment = StudentTaskEntity.createAssignment(
+            title = "MEG 201 Thermodynamics Lab Report",
+            description = "Entropy calculations and PV diagrams",
+            subject = "Engineering",
+            courseCode = "MEG 201",
+            dueDate = "Tomorrow, 5:00 PM",
+            priority = StudentTaskPriority.HIGH,
+            estimatedMinutes = 120
+        )
+        taskRepo.insertTask(assignment)
+
+        // 3. Insert Test Prep Task
+        val testPrep = StudentTaskEntity.createTestPrep(
+            title = "UTME / JAMB Physics Mock Practice",
+            description = "50 timed speed drill questions",
+            subject = "Physics",
+            courseCode = "JAMB-CBT",
+            dueDate = "Saturday, 10:00 AM",
+            targetScore = 85,
+            priority = StudentTaskPriority.URGENT,
+            estimatedMinutes = 60
+        )
+        taskRepo.insertTask(testPrep)
+
+        // 4. Verify queries and counts
+        val all = taskRepo.allTasks.first()
+        assertEquals(2, all.size)
+        assertEquals(2, taskRepo.totalCount.first())
+        assertEquals(2, taskRepo.pendingCount.first())
+        assertEquals(0, taskRepo.completedCount.first())
+
+        val assignmentsOnly = taskRepo.assignments.first()
+        assertEquals(1, assignmentsOnly.size)
+        assertEquals(assignment.id, assignmentsOnly.first().id)
+        assertEquals(StudentTaskType.ASSIGNMENT, assignmentsOnly.first().typeEnum)
+
+        val testPrepsOnly = taskRepo.testPrepTasks.first()
+        assertEquals(1, testPrepsOnly.size)
+        assertEquals(testPrep.id, testPrepsOnly.first().id)
+        assertEquals(StudentTaskType.TEST_PREPARATION, testPrepsOnly.first().typeEnum)
+        assertEquals(85, testPrepsOnly.first().targetScore)
+
+        // 5. Update progress
+        taskRepo.updateProgress(assignment.id, 50)
+        val updatedAssignment = taskRepo.getTaskById(assignment.id)
+        assertNotNull(updatedAssignment)
+        assertEquals(50, updatedAssignment!!.progressPercentage)
+        assertEquals(StudentTaskStatus.IN_PROGRESS.name, updatedAssignment.status)
+        assertEquals(false, updatedAssignment.isCompleted)
+
+        // 6. Complete test prep task
+        taskRepo.toggleTaskCompletion(testPrep.id, true)
+        val completedTestPrep = taskRepo.getTaskById(testPrep.id)
+        assertNotNull(completedTestPrep)
+        assertEquals(true, completedTestPrep!!.isCompleted)
+        assertEquals(100, completedTestPrep.progressPercentage)
+        assertEquals(StudentTaskStatus.COMPLETED.name, completedTestPrep.status)
+        assertEquals(1, taskRepo.completedCount.first())
+        assertEquals(1, taskRepo.pendingCount.first())
+
+        // 7. Delete task
+        taskRepo.deleteTask(assignment.id)
+        assertEquals(1, taskRepo.allTasks.first().size)
+    }
+
+    @Test
+    fun `test task repository seed initial data`() = testScope.runTest {
+        val studentDao = testDb.studentTaskDao()
+        val taskRepo = TaskRepository(studentDao, testDispatcher)
+
+        // Seed initial tasks
+        taskRepo.seedInitialAcademicTasksIfEmpty()
+
+        val tasks = taskRepo.allTasks.first()
+        assertTrue(tasks.size >= 5)
+
+        val assignments = taskRepo.assignments.first()
+        assertTrue(assignments.isNotEmpty())
+        assertTrue(assignments.any { it.courseCode == "MEG 201" })
+
+        val testPrep = taskRepo.testPrepTasks.first()
+        assertTrue(testPrep.isNotEmpty())
+        assertTrue(testPrep.any { it.courseCode == "JAMB-CBT" })
     }
 
     @Test

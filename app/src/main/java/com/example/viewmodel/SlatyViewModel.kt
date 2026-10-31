@@ -66,6 +66,82 @@ class SlatyViewModel(application: Application) : AndroidViewModel(application) {
     val communities = repository.communities
     val privateChats = repository.privateChats
     val notifications = repository.notifications
+    val taskRepository = repository.taskRepository
+    val studentAcademicTasks = taskRepository.allTasks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val studentAssignments = taskRepository.assignments.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val studentTestPrepTasks = taskRepository.testPrepTasks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val pendingAcademicTasksCount = taskRepository.pendingCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val completedAcademicTasksCount = taskRepository.completedCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    fun toggleAcademicTask(id: String, isCompleted: Boolean) {
+        viewModelScope.launch {
+            taskRepository.toggleTaskCompletion(id, isCompleted)
+        }
+    }
+
+    fun updateAcademicTaskProgress(id: String, progress: Int) {
+        viewModelScope.launch {
+            taskRepository.updateProgress(id, progress)
+        }
+    }
+
+    fun createAcademicAssignment(
+        title: String,
+        description: String,
+        subject: String,
+        courseCode: String,
+        dueDate: String,
+        priority: com.example.data.local.StudentTaskPriority = com.example.data.local.StudentTaskPriority.MEDIUM,
+        estimatedMinutes: Int = 90,
+        notes: String = ""
+    ) {
+        viewModelScope.launch {
+            val task = com.example.data.local.StudentTaskEntity.createAssignment(
+                title = title,
+                description = description,
+                subject = subject,
+                courseCode = courseCode,
+                dueDate = dueDate,
+                priority = priority,
+                estimatedMinutes = estimatedMinutes,
+                notes = notes
+            )
+            taskRepository.insertTask(task)
+        }
+    }
+
+    fun createTestPrepTask(
+        title: String,
+        description: String,
+        subject: String,
+        courseCode: String,
+        dueDate: String,
+        targetScore: Int = 85,
+        priority: com.example.data.local.StudentTaskPriority = com.example.data.local.StudentTaskPriority.HIGH,
+        estimatedMinutes: Int = 60,
+        notes: String = ""
+    ) {
+        viewModelScope.launch {
+            val task = com.example.data.local.StudentTaskEntity.createTestPrep(
+                title = title,
+                description = description,
+                subject = subject,
+                courseCode = courseCode,
+                dueDate = dueDate,
+                targetScore = targetScore,
+                priority = priority,
+                estimatedMinutes = estimatedMinutes,
+                notes = notes
+            )
+            taskRepository.insertTask(task)
+        }
+    }
+
+    fun deleteAcademicTask(id: String) {
+        viewModelScope.launch {
+            taskRepository.deleteTask(id)
+        }
+    }
 
     private val _studentTab = MutableStateFlow(StudentTab.HOME)
     val studentTab: StateFlow<StudentTab> = _studentTab.asStateFlow()

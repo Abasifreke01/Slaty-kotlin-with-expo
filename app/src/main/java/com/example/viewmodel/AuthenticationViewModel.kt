@@ -120,16 +120,15 @@ class AuthenticationViewModel(application: Application) : AndroidViewModel(appli
                     _uiState.value = AuthUiState.Error("Sign in failed: Empty user profile")
                 }
             } catch (e: Exception) {
-                Log.w("AuthViewModel", "Sign in with email failed, using local demo fallback", e)
-                val displayName = email.substringBefore("@").replace(".", " ")
-                val user = User(
-                    id = "usr_${System.currentTimeMillis()}",
-                    name = if (role == UserRole.TUTOR) "Dr. $displayName" else displayName,
-                    username = displayName.lowercase().replace(" ", "_"),
-                    email = email,
-                    role = role
-                )
-                _uiState.value = AuthUiState.Success(user)
+                Log.w("AuthViewModel", "Sign in with email failed", e)
+                val msg = when {
+                    e.message?.contains("password", ignoreCase = true) == true -> "Incorrect password. Please verify and try again."
+                    e.message?.contains("user-not-found", ignoreCase = true) == true || e.message?.contains("no user record", ignoreCase = true) == true -> "No account found with this email. Please switch to Sign Up."
+                    e.message?.contains("invalid-email", ignoreCase = true) == true || e.message?.contains("badly formatted", ignoreCase = true) == true -> "The email address is improperly formatted."
+                    e.message?.contains("network", ignoreCase = true) == true -> "Network connection problem. Please verify internet access."
+                    else -> e.localizedMessage ?: "Sign in failed"
+                }
+                _uiState.value = AuthUiState.Error(msg)
             }
         }
     }
@@ -159,6 +158,14 @@ class AuthenticationViewModel(application: Application) : AndroidViewModel(appli
                 val result = firebaseAuth.createUserWithEmailAndPassword(email.trim(), pass.trim()).await()
                 val fUser = result.user
                 if (fUser != null) {
+                    try {
+                        val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
+                            .setDisplayName(name.trim())
+                            .build()
+                        fUser.updateProfile(profileUpdates).await()
+                    } catch (pe: Exception) {
+                        Log.w("AuthViewModel", "Could not set displayName: ${pe.message}")
+                    }
                     val user = User(
                         id = fUser.uid,
                         name = if (role == UserRole.TUTOR) "Dr. $name" else name,
@@ -172,15 +179,37 @@ class AuthenticationViewModel(application: Application) : AndroidViewModel(appli
                     _uiState.value = AuthUiState.Error("Sign up failed")
                 }
             } catch (e: Exception) {
-                Log.w("AuthViewModel", "Sign up with email failed, using local demo profile", e)
-                val user = User(
-                    id = "usr_${System.currentTimeMillis()}",
-                    name = if (role == UserRole.TUTOR) "Dr. $name" else name,
-                    username = name.lowercase().replace(" ", "_"),
-                    email = email,
-                    role = role
-                )
-                _uiState.value = AuthUiState.Success(user)
+                Log.w("AuthViewModel", "Sign up with email failed", e)
+                val msg = when {
+                    e.message?.contains("email-already-in-use", ignoreCase = true) == true -> "An account already exists with this email. Please sign in."
+                    e.message?.contains("weak-password", ignoreCase = true) == true -> "Password is too weak. Please choose a stronger password."
+                    else -> e.localizedMessage ?: "Failed to create account"
+                }
+                _uiState.value = AuthUiState.Error(msg)
+            }
+        }
+    }
+
+    fun sendPasswordReset(email: String, onResult: (Boolean, String) -> Unit) {
+        if (email.isBlank() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()) {
+            onResult(false, "Please enter a valid email address.")
+            return
+        }
+        viewModelScope.launch {
+            val firebaseAuth = auth
+            if (firebaseAuth != null) {
+                try {
+                    firebaseAuth.sendPasswordResetEmail(email.trim()).await()
+                    onResult(true, "Password reset link sent to $email. Please check your inbox.")
+                } catch (e: Exception) {
+                    val msg = when {
+                        e.message?.contains("user-not-found", ignoreCase = true) == true -> "No account found with this email."
+                        else -> e.localizedMessage ?: "Failed to send reset email."
+                    }
+                    onResult(false, msg)
+                }
+            } else {
+                onResult(true, "Demo link sent! Check your inbox at $email.")
             }
         }
     }

@@ -18,6 +18,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.example.model.UserRole
 import com.example.ui.components.*
 import com.example.ui.screens.auth.LoginScreen
@@ -26,6 +31,7 @@ import com.example.ui.screens.common.ChatScreen
 import com.example.ui.screens.common.NotificationsScreen
 import com.example.ui.screens.common.VideoCallScreen
 import com.example.ui.screens.student.*
+import com.example.ui.screens.student.MainDashboardScreen
 import com.example.ui.screens.tutor.*
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.SlatyDarkBackground
@@ -120,6 +126,7 @@ fun SlatyApp(
     activity: Activity
 ) {
     val context = LocalContext.current
+    val navController = rememberNavController()
     val currentUser by viewModel.currentUser.collectAsState()
     val studentTab by viewModel.studentTab.collectAsState()
     val tutorTab by viewModel.tutorTab.collectAsState()
@@ -137,6 +144,7 @@ fun SlatyApp(
     val communities by viewModel.communities.collectAsState()
     val privateChats by viewModel.privateChats.collectAsState()
     val notifications by viewModel.notifications.collectAsState()
+    val academicTasks by viewModel.studentAcademicTasks.collectAsState()
     val cbtState by viewModel.cbtState.collectAsState()
 
     val homeSearchQuery by viewModel.homeSearchQuery.collectAsState()
@@ -166,18 +174,40 @@ fun SlatyApp(
         }
     }
 
-    // Sync AuthenticationViewModel with app state
+    // Sync AuthenticationViewModel with app state and manage Navigation transition
     LaunchedEffect(authUiState) {
         when (val state = authUiState) {
             is AuthUiState.Success -> {
                 viewModel.loginUser(state.user.email, state.user.role)
                 authViewModel.resetState()
+                try {
+                    navController.navigate("dashboard") {
+                        popUpTo("welcome") { inclusive = true }
+                    }
+                } catch (e: Exception) {
+                    // Ignore navigation state race conditions
+                }
             }
             is AuthUiState.Error -> {
                 viewModel.showFeedback(state.message)
                 authViewModel.resetState()
             }
             else -> {}
+        }
+    }
+
+    // Auto-navigate to welcome screen on logout
+    LaunchedEffect(currentUser) {
+        if (currentUser == null) {
+            try {
+                if (navController.currentDestination?.route != "welcome") {
+                    navController.navigate("welcome") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore navigation state race conditions
+            }
         }
     }
 
@@ -226,74 +256,94 @@ fun SlatyApp(
         )
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            if (currentUser != null && subScreen is SubScreen.None) {
-                SlatyTopHeader(
-                    user = currentUser,
-                    onNotificationClick = { viewModel.navigateTo(SubScreen.Notifications) },
-                    onRoleSwitchClick = {
-                        val nextRole = if (currentUser?.role == UserRole.STUDENT) UserRole.TUTOR else UserRole.STUDENT
-                        viewModel.switchRole(nextRole)
-                    },
-                    modifier = Modifier.statusBarsPadding()
-                )
-            }
-        },
-        bottomBar = {
-            if (currentUser != null && subScreen is SubScreen.None) {
-                if (currentUser?.role == UserRole.STUDENT) {
-                    SlatyStudentBottomBar(
-                        selectedTab = studentTab,
-                        unreadConnectCount = 3,
-                        onTabSelected = { viewModel.setStudentTab(it) }
-                    )
-                } else {
-                    SlatyTutorBottomBar(
-                        selectedTab = tutorTab,
-                        unreadConnectCount = 1,
-                        onTabSelected = { viewModel.setTutorTab(it) }
-                    )
-                }
-            }
-        },
-        containerColor = SlatyDarkBackground
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(SlatyDarkBackground)
-        ) {
-            when {
-                // Not authenticated or Auth Screens
-                currentUser == null || subScreen is SubScreen.AuthWelcome -> {
-                    WelcomeScreen(
-                        onLoginAsStudent = { viewModel.navigateTo(SubScreen.AuthLogin(UserRole.STUDENT)) },
-                        onLoginAsTutor = { viewModel.navigateTo(SubScreen.AuthLogin(UserRole.TUTOR)) }
-                    )
-                }
+    NavHost(
+        navController = navController,
+        startDestination = if (currentUser != null) "dashboard" else "welcome",
+        modifier = Modifier.fillMaxSize()
+    ) {
+        composable("welcome") {
+            WelcomeScreen(
+                onLoginAsStudent = { navController.navigate("login/STUDENT") },
+                onLoginAsTutor = { navController.navigate("login/TUTOR") }
+            )
+        }
 
-                subScreen is SubScreen.AuthLogin -> {
-                    val targetRole = (subScreen as SubScreen.AuthLogin).targetRole
-                    LoginScreen(
-                        role = targetRole,
-                        onBack = { viewModel.navigateTo(SubScreen.AuthWelcome) },
-                        onLoginSuccess = { email, role ->
-                            authViewModel.signInWithEmail(email, "password123", role)
-                        },
-                        onRegisterSuccess = { email, pass, name, role ->
-                            authViewModel.signUpWithEmail(email, pass, name, role)
-                        },
-                        onGoogleSignIn = {
-                            authViewModel.signInWithGoogle(activity, targetRole)
+        composable(
+            route = "login/{role}",
+            arguments = listOf(navArgument("role") { type = NavType.StringType; defaultValue = "STUDENT" })
+        ) { backStackEntry ->
+            val roleStr = backStackEntry.arguments?.getString("role") ?: "STUDENT"
+            val targetRole = try { UserRole.valueOf(roleStr) } catch (e: Exception) { UserRole.STUDENT }
+
+            LoginScreen(
+                role = targetRole,
+                uiState = authUiState,
+                onBack = { navController.popBackStack() },
+                onLogin = { email, pass, role ->
+                    authViewModel.signInWithEmail(email, pass, role)
+                },
+                onRegister = { email, pass, name, role ->
+                    authViewModel.signUpWithEmail(email, pass, name, role)
+                },
+                onGoogleSignIn = { role ->
+                    authViewModel.signInWithGoogle(activity, role)
+                },
+                onForgotPassword = { email, onResult ->
+                    authViewModel.sendPasswordReset(email, onResult)
+                },
+                onQuickDemoLogin = { email, role ->
+                    viewModel.loginUser(email, role)
+                    navController.navigate("dashboard") {
+                        popUpTo("welcome") { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable("dashboard") {
+            Scaffold(
+                snackbarHost = { SnackbarHost(snackbarHostState) },
+                topBar = {
+                    if (currentUser != null && subScreen is SubScreen.None) {
+                        SlatyTopHeader(
+                            user = currentUser,
+                            onNotificationClick = { viewModel.navigateTo(SubScreen.Notifications) },
+                            onRoleSwitchClick = {
+                                val nextRole = if (currentUser?.role == UserRole.STUDENT) UserRole.TUTOR else UserRole.STUDENT
+                                viewModel.switchRole(nextRole)
+                            },
+                            modifier = Modifier.statusBarsPadding()
+                        )
+                    }
+                },
+                bottomBar = {
+                    if (currentUser != null && subScreen is SubScreen.None) {
+                        if (currentUser?.role == UserRole.STUDENT) {
+                            SlatyStudentBottomBar(
+                                selectedTab = studentTab,
+                                unreadConnectCount = 3,
+                                onTabSelected = { viewModel.setStudentTab(it) }
+                            )
+                        } else {
+                            SlatyTutorBottomBar(
+                                selectedTab = tutorTab,
+                                unreadConnectCount = 1,
+                                onTabSelected = { viewModel.setTutorTab(it) }
+                            )
                         }
-                    )
-                }
-
-                // Sub-Screens
-                subScreen is SubScreen.TutorProfile -> {
+                    }
+                },
+                containerColor = SlatyDarkBackground
+            ) { innerPadding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .background(SlatyDarkBackground)
+                ) {
+                    when {
+                        // Sub-Screens
+                        subScreen is SubScreen.TutorProfile -> {
                     val tutor = (subScreen as SubScreen.TutorProfile).tutor
                     TutorProfileDetailScreen(
                         tutor = tutor,
@@ -419,26 +469,57 @@ fun SlatyApp(
                 currentUser?.role == UserRole.STUDENT -> {
                     when (studentTab) {
                         StudentTab.HOME -> {
-                            StudentDashboardScreen(
-                                searchQuery = homeSearchQuery,
-                                selectedTarget = homeSearchTarget,
-                                selectedSubject = homeSelectedSubject,
-                                selectedLevel = homeSelectedLevel,
-                                selectedSortOption = homeSortOption,
-                                filteredTutors = filteredHomeTutors,
-                                filteredCommunities = filteredHomeCommunities,
-                                onSearchQueryChange = { viewModel.setHomeSearchQuery(it) },
-                                onTargetSelect = { viewModel.setHomeSearchTarget(it) },
-                                onSubjectSelect = { viewModel.setHomeSubjectFilter(it) },
-                                onLevelSelect = { viewModel.setHomeLevelFilter(it) },
-                                onSortOptionSelect = { viewModel.setHomeSortOption(it) },
-                                onClearFilters = { viewModel.clearHomeFilters() },
-                                onTutorClick = { tutor -> viewModel.navigateTo(SubScreen.TutorProfile(tutor)) },
-                                onBookTutorClick = { tutor -> viewModel.navigateTo(SubScreen.ReachTutor(tutor)) },
-                                onCommunityClick = { comm -> viewModel.navigateTo(SubScreen.CommunityChat(comm)) },
-                                onSolveProblemClick = { viewModel.navigateTo(SubScreen.CreateTask()) },
-                                onCbtClick = { viewModel.startCbtQuiz("Biology") },
-                                onTopicClick = { topic -> viewModel.openTopicModal(topic) }
+                            MainDashboardScreen(
+                                user = currentUser,
+                                liveClasses = liveClasses,
+                                communities = communities,
+                                onJoinLiveClass = { code, title ->
+                                    viewModel.navigateTo(SubScreen.LiveVideoRoom(title, code, false))
+                                },
+                                onOpenStudyGroup = { comm ->
+                                    viewModel.navigateTo(SubScreen.CommunityChat(comm))
+                                },
+                                onAskQuestionClick = {
+                                    viewModel.navigateTo(SubScreen.CreateTask())
+                                },
+                                onStartCbtClick = { subject ->
+                                    viewModel.startCbtQuiz(subject)
+                                },
+                                onNotificationsClick = {
+                                    viewModel.navigateTo(SubScreen.Notifications)
+                                },
+                                onRoleSwitchClick = {
+                                    val nextRole = if (currentUser?.role == UserRole.STUDENT) UserRole.TUTOR else UserRole.STUDENT
+                                    viewModel.switchRole(nextRole)
+                                },
+                                onViewAllClasses = {
+                                    viewModel.setStudentTab(StudentTab.LIVE_CLASSES)
+                                },
+                                onViewAllGroups = {
+                                    viewModel.setStudentTab(StudentTab.CONNECT)
+                                },
+                                onCreateStudyGroupClick = {
+                                    showCreateCommunityDialog = true
+                                },
+                                academicTasks = academicTasks,
+                                onToggleAcademicTask = { id, completed ->
+                                    viewModel.toggleAcademicTask(id, completed)
+                                },
+                                onUpdateAcademicTaskProgress = { id, progress ->
+                                    viewModel.updateAcademicTaskProgress(id, progress)
+                                },
+                                onCreateAcademicTask = { title, desc, type, subject, code, dueDate, priority, targetScore ->
+                                    if (type == com.example.data.local.StudentTaskType.ASSIGNMENT) {
+                                        viewModel.createAcademicAssignment(title, desc, subject, code, dueDate, priority)
+                                    } else {
+                                        viewModel.createTestPrepTask(title, desc, subject, code, dueDate, targetScore, priority)
+                                    }
+                                    viewModel.showFeedback("Task added to local database!")
+                                },
+                                onDeleteAcademicTask = { id ->
+                                    viewModel.deleteAcademicTask(id)
+                                    viewModel.showFeedback("Task deleted")
+                                }
                             )
                         }
                         StudentTab.FIND_TUTOR -> {
@@ -485,6 +566,9 @@ fun SlatyApp(
                                 onLogout = {
                                     authViewModel.signOut()
                                     viewModel.logout()
+                                    navController.navigate("welcome") {
+                                        popUpTo(0) { inclusive = true }
+                                    }
                                 }
                             )
                         }
@@ -536,6 +620,9 @@ fun SlatyApp(
                                 onLogout = {
                                     authViewModel.signOut()
                                     viewModel.logout()
+                                    navController.navigate("welcome") {
+                                        popUpTo(0) { inclusive = true }
+                                    }
                                 }
                             )
                         }
@@ -543,5 +630,7 @@ fun SlatyApp(
                 }
             }
         }
+    }
+}
     }
 }

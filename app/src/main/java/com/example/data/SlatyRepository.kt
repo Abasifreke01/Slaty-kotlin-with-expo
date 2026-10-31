@@ -20,6 +20,11 @@ class SlatyRepository(private val context: Context) {
 
     private val repoScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     val taskSyncRepository = TaskSyncRepository.create(context, repoScope)
+    val taskRepository = com.example.data.repository.TaskRepository(context).apply {
+        repoScope.launch {
+            seedInitialAcademicTasksIfEmpty()
+        }
+    }
 
     // Current User Session
     private val _currentUser = MutableStateFlow<User?>(

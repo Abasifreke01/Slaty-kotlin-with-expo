@@ -5,10 +5,18 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [TaskEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [
+        TaskEntity::class,
+        StudentTaskEntity::class
+    ],
+    version = 2,
+    exportSchema = false
+)
 abstract class SlatyDatabase : RoomDatabase() {
 
     abstract fun taskDao(): TaskDao
+    abstract fun studentTaskDao(): StudentTaskDao
 
     companion object {
         @Volatile
@@ -20,7 +28,9 @@ abstract class SlatyDatabase : RoomDatabase() {
                     context.applicationContext,
                     SlatyDatabase::class.java,
                     "slaty_tasks.db"
-                ).build()
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }
